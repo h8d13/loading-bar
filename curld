@@ -1,0 +1,22 @@
+#!/bin/bash
+url="$1"
+output="${2:-$(basename "$url")}"
+
+trap 'printf "\e]9;4;0;\e\\"' EXIT INT TERM
+
+curl -L --progress-bar -o "$output" "$url" 2>&1 | \
+  stdbuf -o0 tr '\r' '\n' | \
+  while IFS= read -r line; do
+    if [[ "$line" =~ ([0-9]+)\.[0-9]+% ]]; then
+      pct="${BASH_REMATCH[1]}"
+      printf "\e]9;4;1;%d\e\\" "$pct"
+      printf "\r%s" "$line" >&2
+    fi
+  done
+echo
+
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+  printf "\e]9;4;2;100\e\\"
+  sleep 0.5
+  exit 1
+fi
