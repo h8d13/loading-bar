@@ -16,7 +16,7 @@ extract() {
 	local archive="$1" src="$2"
 	local dir="${archive%.tar.gz}"
 	mkdir -p "$dir" || return
-	tar -xf "$archive" -C "$dir" --strip-components=1 \
+	tar -xvf "$archive" -C "$dir" --strip-components=1 \
 		&& rm -- "$archive" \
 		&& printf '%s\n' "$src" > "$dir/.source"
 }

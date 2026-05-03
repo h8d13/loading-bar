@@ -21,8 +21,8 @@ extract() {
 	esac
 	mkdir -p "$dir" || return
 	case "$archive" in
-		*.zip) unzip -q "$archive" -d "$dir" ;;
-		*)     tar -xf "$archive" -C "$dir" --strip-components=1 ;;
+		*.zip) unzip "$archive" -d "$dir" ;;
+		*)     tar -xvf "$archive" -C "$dir" --strip-components=1 ;;
 	esac && rm -- "$archive" && printf '%s\n' "$src" > "$dir/.source"
 }
 

@@ -4,14 +4,15 @@ output="${2:-$(basename "$url")}"
 
 trap 'printf "\e]9;4;0;\e\\"' EXIT INT TERM
 
-curl -L --progress-bar -o "$output" "$url" 2>&1 | \
+# Default curl meter: first numeric column is "% Total". 0 = unknown size.
+curl -L -o "$output" "$url" 2>&1 | \
   stdbuf -o0 tr '\r' '\n' | \
   while IFS= read -r line; do
-    if [[ "$line" =~ ([0-9]+)\.[0-9]+% ]]; then
-      pct="${BASH_REMATCH[1]}"
-      printf "\e]9;4;1;%d\e\\" "$pct"
+    read -r pct _ <<<"$line"
+    if [[ "$pct" =~ ^[0-9]+$ ]]; then
+      [[ "$pct" -gt 0 ]] && printf "\e]9;4;1;%d\e\\" "$pct"
+      printf "\r%s" "$line" >&2
     fi
-    [[ -n "$line" ]] && printf "\r%s" "$line" >&2
   done
 echo
 
