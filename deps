@@ -1,0 +1,7 @@
+deps="
+    curl
+    tar
+    zip
+    bash
+    git
+"

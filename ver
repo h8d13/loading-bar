@@ -1,0 +1,114 @@
+#!/bin/bash
+# usage: ver
+# scans cwd for dirs with a .source file (written by grel/gsrc) and updates
+# any whose upstream has a newer version (semver-detected for releases,
+# sha-compared for source branches).
+
+# semver-ish pattern: e.g. 1.2.3, v1.2.3, 1.116.02821, 0.1.08-0
+VERPAT='v?[0-9]+(\.[0-9]+)+([.-][0-9A-Za-z]+)*'
+
+# extract first semver-like substring; print it
+extract_ver() {
+	echo "$1" | grep -oE "$VERPAT" | head -n1
+}
+
+strip_ext() {
+	local name="$1" ext=""
+	case "$name" in
+		*.tar.gz)  ext=".tar.gz" ;;
+		*.tgz)     ext=".tgz" ;;
+		*.tar.bz2) ext=".tar.bz2" ;;
+		*.tbz2)    ext=".tbz2" ;;
+		*.tar.xz)  ext=".tar.xz" ;;
+		*.txz)     ext=".txz" ;;
+		*.tar)     ext=".tar" ;;
+		*.zip)     ext=".zip" ;;
+	esac
+	printf '%s\n%s\n' "${name%"$ext"}" "$ext"
+}
+
+# split asset filename around the version: prints "<prefix>\n<ver>\n<suffix>"
+# version is searched within the basename (extension stripped), suffix includes ext.
+split_asset() {
+	local name="$1" base ext ver
+	{ IFS= read -r base; IFS= read -r ext; } < <(strip_ext "$name")
+	ver=$(extract_ver "$base")
+	[ -z "$ver" ] && return 1
+	printf '%s\n%s\n%s\n' "${base%%"$ver"*}" "$ver" "${base#*"$ver"}$ext"
+}
+
+check_release() {
+	local dir="$1" src="$2" owner repo asset
+	[[ "$src" =~ ^https://github\.com/([^/]+)/([^/]+)/releases/download/[^/]+/(.+)$ ]] || return 1
+	owner="${BASH_REMATCH[1]}"
+	repo="${BASH_REMATCH[2]}"
+	asset="${BASH_REMATCH[3]}"
+
+	local parts prefix local_ver suffix
+	parts=$(split_asset "$asset") || { echo "[$dir] no version pattern in $asset"; return 0; }
+	{ IFS= read -r prefix; IFS= read -r local_ver; IFS= read -r suffix; } <<< "$parts"
+
+	# fetch all asset urls in latest release; pick one matching <prefix>...<suffix>
+	local api_url assets new_asset_url new_asset new_ver
+	api_url="https://api.github.com/repos/$owner/$repo/releases/latest"
+	assets=$(curl -s "$api_url" | grep -oE '"browser_download_url": *"[^"]+"' | sed -E 's/.*"(https[^"]+)".*/\1/')
+	[ -z "$assets" ] && { echo "[$dir] failed to list assets"; return 0; }
+
+	while IFS= read -r u; do
+		local name="${u##*/}"
+		[[ "$name" == "$prefix"*"$suffix" ]] || continue
+		new_asset_url="$u"
+		new_asset="$name"
+		break
+	done <<< "$assets"
+
+	[ -z "$new_asset_url" ] && { echo "[$dir] no matching asset (${prefix}*${suffix}) in latest release"; return 0; }
+
+	local new_base
+	{ IFS= read -r new_base; } < <(strip_ext "$new_asset")
+	new_ver=$(extract_ver "$new_base")
+	echo "[$dir] local=$local_ver latest=$new_ver"
+	[ "$local_ver" = "$new_ver" ] && return 0
+
+	local newest
+	newest=$(printf '%s\n%s\n' "$local_ver" "$new_ver" | sort -V | tail -n1)
+	[ "$newest" = "$local_ver" ] && return 0
+
+	echo "[$dir] -> ${prefix}${new_ver}${suffix%%.tar*}"
+	rm -rf -- "$dir" || return 0
+	./grel "$new_asset_url"
+}
+
+check_branch() {
+	local dir="$1" src="$2" owner repo branch local_sha new_sha new_short
+	[[ "$src" =~ ^https://github\.com/([^/]+)/([^/]+)/archive/refs/heads/(.+)\.tar\.gz$ ]] || return 1
+	owner="${BASH_REMATCH[1]}"
+	repo="${BASH_REMATCH[2]}"
+	branch="${BASH_REMATCH[3]}"
+
+	local_sha="${dir##*-}"
+	new_sha=$(git ls-remote "https://github.com/$owner/$repo" "refs/heads/$branch" | cut -f1)
+	[ -z "$new_sha" ] && { echo "[$dir] failed to resolve $branch"; return 0; }
+	new_short="${new_sha:0:7}"
+
+	echo "[$dir] local=$local_sha latest=$new_short ($branch)"
+	[ "$local_sha" = "$new_short" ] && return 0
+
+	echo "[$dir] -> ${repo}-${new_short}"
+	rm -rf -- "$dir" || return 0
+	./gsrc "$owner" "$repo" "$branch"
+}
+
+check_one() {
+	local dir="$1" src
+	src=$(cat "$dir/.source") || return
+	check_release "$dir" "$src" && return
+	check_branch "$dir" "$src" && return
+	echo "[$dir] skip (unrecognized source url)"
+}
+
+shopt -s nullglob
+for d in */; do
+	d="${d%/}"
+	[ -f "$d/.source" ] && check_one "$d"
+done

@@ -1,0 +1,31 @@
+#!/bin/bash
+# usage: gsrc <owner> <repo> [branch]
+# downloads branch tip pinned to current HEAD sha, extracts to <repo>-<sha7>.
+
+PROV="https://github.com"
+owner="$1"
+repo="$2"
+branch="${3:-master}"
+
+if [ -z "$owner" ] || [ -z "$repo" ]; then
+	echo "usage: $0 <owner> <repo> [branch]" >&2
+	exit 2
+fi
+
+extract() {
+	local archive="$1" src="$2"
+	local dir="${archive%.tar.gz}"
+	mkdir -p "$dir" || return
+	tar -xf "$archive" -C "$dir" --strip-components=1 \
+		&& rm -- "$archive" \
+		&& printf '%s\n' "$src" > "$dir/.source"
+}
+
+sha=$(git ls-remote "$PROV/$owner/$repo" "refs/heads/$branch" | cut -f1)
+[ -z "$sha" ] && { echo "failed to resolve $branch on $owner/$repo" >&2; exit 1; }
+short="${sha:0:7}"
+out="$repo-$short.tar.gz"
+src="$PROV/$owner/$repo/archive/refs/heads/$branch.tar.gz"
+
+./curld "$PROV/$owner/$repo/archive/$sha.tar.gz" "$out" || exit $?
+extract "$out" "$src"
