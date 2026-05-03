@@ -1,14 +1,10 @@
 #!/bin/bash
-# usage: grel <url> [output]
-# downloads a release asset, extracts, records source url.
+# usage:
+#   grel <url> [output]              - download an explicit asset url
+#   grel <owner> <repo> [filter]     - pick latest-release asset whose name
+#                                      contains <filter> (or first if omitted)
 
-url="$1"
-out="${2:-$(basename "$url")}"
-
-if [ -z "$url" ]; then
-	echo "usage: $0 <url> [output]" >&2
-	exit 2
-fi
+is_url() { [[ "$1" == *://* ]]; }
 
 extract() {
 	local archive="$1" src="$2" dir
@@ -29,6 +25,69 @@ extract() {
 		*)     tar -xf "$archive" -C "$dir" --strip-components=1 ;;
 	esac && rm -- "$archive" && printf '%s\n' "$src" > "$dir/.source"
 }
+
+if [ -z "$1" ]; then
+	echo "usage: $0 <url> [output] | <owner> <repo> [filter]" >&2
+	exit 2
+fi
+
+if is_url "$1"; then
+	url="$1"
+	out="${2:-$(basename "$url")}"
+else
+	owner="$1"
+	repo="$2"
+	filter="$3"
+	[ -z "$repo" ] && { echo "usage: $0 <owner> <repo> [filter]" >&2; exit 2; }
+
+	assets=$(curl -s "https://api.github.com/repos/$owner/$repo/releases/latest" \
+		| grep -oE '"browser_download_url": *"[^"]+"' \
+		| sed -E 's/.*"(https[^"]+)".*/\1/')
+	[ -z "$assets" ] && { echo "no assets in latest release of $owner/$repo" >&2; exit 1; }
+
+	# platform tokens for the current host (lowercased substring match)
+	case "$(uname -sm)" in
+		"Linux x86_64")  plats="linux-x64 linux_x64 linux-amd64 linux_amd64 amd64-linux x86_64-linux linux64" ;;
+		"Linux aarch64") plats="linux-arm64 linux_arm64 aarch64-linux arm64-linux" ;;
+		"Darwin x86_64") plats="darwin-x64 macos-x64 osx-x64 darwin-amd64" ;;
+		"Darwin arm64")  plats="darwin-arm64 macos-arm64 osx-arm64" ;;
+		*)               plats="" ;;
+	esac
+
+	# pick first asset whose lowercased basename contains $1 AND is extractable
+	pick_url() {
+		local sub="$1" u name lc
+		while IFS= read -r u; do
+			name="${u##*/}"; lc="${name,,}"
+			[[ -z "$sub" || "$lc" == *"$sub"* ]] || continue
+			[[ "$lc" =~ \.(tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tar|zip)$ ]] || continue
+			echo "$u"; return
+		done <<< "$assets"
+	}
+
+	if [ -n "$filter" ]; then
+		url=$(pick_url "${filter,,}")
+		[ -z "$url" ] && url=$(echo "$assets" | grep -F -- "$filter" | head -n1)
+	else
+		# 1. <repo>-<plat> exact prefix match (avoids -cli, -reh, -src variants)
+		for p in $plats; do
+			url=$(pick_url "${repo,,}-$p"); [ -n "$url" ] && break
+			url=$(pick_url "${repo,,}_$p"); [ -n "$url" ] && break
+		done
+		# 2. any asset containing the platform token
+		if [ -z "$url" ]; then
+			for p in $plats; do
+				url=$(pick_url "$p"); [ -n "$url" ] && break
+			done
+		fi
+		# 3. any extractable asset
+		[ -z "$url" ] && url=$(pick_url "")
+		# 4. last resort: first asset of any kind
+		[ -z "$url" ] && url=$(echo "$assets" | head -n1)
+	fi
+	[ -z "$url" ] && { echo "no asset matching '$filter' in latest release" >&2; exit 1; }
+	out="$(basename "$url")"
+fi
 
 ./curld "$url" "$out" || exit $?
 extract "$out" "$url"

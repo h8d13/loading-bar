@@ -1,4 +1,0 @@
-#!/bin/bash
-PROV="https://github.com"
-DEF_BRANCH="${3:-master}"
-./curld "$PROV/$1/$2/archive/refs/heads/$DEF_BRANCH.tar.gz" "$2-$DEF_BRANCH.tar.gz"
